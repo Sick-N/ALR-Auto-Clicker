@@ -652,16 +652,6 @@ def build_ui():
     click_btn.pack(pady=6)
     click_btn.image = processor_img
 
-    # Debug button
-    def debug_give_money() -> None:
-        global instructions
-        instructions += 1_000_000_000
-        update_display()
-
-    tk.Button(left_col, text="[DEBUG] +1 Billion Instructions",
-              command=debug_give_money, fg="red", font=("Arial", 9, "italic"),
-              bg=THEME_PANEL).pack(pady=(0, 6))
-
     # Generators frame (scrolling not required for a few entries)
     tk.Label(left_col, text="Generators", font=("Arial", 12, "bold"),
              bg=THEME_BG, fg=THEME_ACCENT).pack(anchor="nw", pady=(6,2))

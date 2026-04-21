@@ -2,8 +2,8 @@
 # Instruction Clicker — main entry point.
 #
 # Architecture:
-#   generators.py  — low-level generator definitions (name, cost, increment)
-#   multipliers.py — high-level multiplier definitions (name, cost, effect info)
+#   Generators.py  — low-level generator definitions (name, cost, increment, info)
+#   Multipliers.py — high-level multiplier definitions (name, cost, tooltip)
 #   main.py        — all game state, logic, and UI
 #
 # ── Multiplier formula ───────────────────────────────────────────────────────
@@ -13,14 +13,14 @@
 #       raw_ips[g] = owned[g] * base_increment[g] * gen_mult[g]
 #
 #   Total IPS:
-#       base_sum = sum(raw_ips[g] for all g)
+#       base_sum  = sum(raw_ips[g] for all g)
 #       for_level = number of FOR_LOOP purchases
 #       fc_level  = number of FUNCTION_CALL purchases
-#       stack_mul = 10 ^ stack_prestige_count          (permanent)
+#       stack_mul = 10 ^ stack_prestige_count  (permanent)
 #
-#       TOTAL_IPS = (max(for_level,1) * base_sum) ^ (1 + fc_level)  * stack_mul
+#       TOTAL_IPS = (max(for_level,1) * base_sum) ^ (1 + fc_level) * stack_mul
 #
-#   Click value uses the same TOTAL_MULTIPLIER applied to 1 base instruction.
+#   Click value uses the same global multiplier applied to 1 base instruction.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import tkinter as tk
@@ -32,7 +32,7 @@ from Multipliers import MULTIPLIERS
 # ── Game State ───────────────────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
-instructions: float = 0.0   # current instruction count (float for sub-tick acc.)
+instructions: float = 0.0   # current instruction count
 
 # Generator state  (keyed by generator name)
 owned_counts: dict[str, int]   = {g["name"]: 0 for g in GENERATORS}
@@ -42,19 +42,19 @@ gen_mult:     dict[str, float] = {g["name"]: 1.0 for g in GENERATORS}
 mult_counts: dict[str, int] = {m["name"]: 0 for m in MULTIPLIERS}
 
 # Prestige (STACK) — permanent across resets within a session
-stack_prestige: int = 0          # number of STACK purchases ever
-stack_window: tk.Toplevel | None = None   # reference to the STACK status window
+stack_prestige: int = 0
+stack_window: tk.Toplevel | None = None
 
-# Popup suppression  (reset on STACK prestige)
-popup_view_counts: dict[str, int]  = {}   # views of each popup
-popup_disabled:    dict[str, bool] = {}   # "don't show again" flags
+# Popup suppression for generator info windows (reset on STACK prestige)
+popup_view_counts: dict[str, int]  = {}
+popup_disabled:    dict[str, bool] = {}
 
 # UI widget references (populated during build_ui)
-label:        tk.Label
-ips_label:    tk.Label
-click_btn:    tk.Button
-gen_rows:     dict[str, dict] = {}   # name → {frame, btn, count_lbl, mult_lbl}
-mult_rows:    dict[str, dict] = {}   # name → {frame, btn, cost_lbl}
+label:     tk.Label
+ips_label: tk.Label
+click_btn: tk.Button
+gen_rows:  dict[str, dict] = {}   # name → {frame, btn, count_lbl, mult_lbl}
+mult_rows: dict[str, dict] = {}   # name → {frame, btn}
 
 root: tk.Tk
 
@@ -63,10 +63,10 @@ root: tk.Tk
 # ---------------------------------------------------------------------------
 
 def compute_total_multiplier() -> float:
-    """Return the global multiplier applied on top of raw IPS / click."""
+    """Global multiplier applied to click value and IPS."""
     for_level = mult_counts["FOR_LOOP"]
     fc_level  = mult_counts["FUNCTION_CALL"]
-    for_mul   = max(for_level, 1)          # FOR_LOOP contributes ×level (min ×1)
+    for_mul   = max(for_level, 1)
     exponent  = 1 + fc_level
     stack_mul = 10 ** stack_prestige
     return (for_mul ** exponent) * stack_mul
@@ -83,14 +83,12 @@ def compute_raw_ips() -> float:
 
 def compute_total_ips() -> float:
     """Full IPS after all multipliers."""
-    raw = compute_raw_ips()
-    fc_level  = mult_counts["FUNCTION_CALL"]
+    raw      = compute_raw_ips()
     for_level = mult_counts["FOR_LOOP"]
+    fc_level  = mult_counts["FUNCTION_CALL"]
     for_mul   = max(for_level, 1)
     exponent  = 1 + fc_level
     stack_mul = 10 ** stack_prestige
-    # formula: (for_mul * raw_ips) ^ exponent * stack_mul
-    # guard against negative base (shouldn't happen, but just in case)
     base = for_mul * raw
     if base < 0:
         base = 0.0
@@ -98,27 +96,25 @@ def compute_total_ips() -> float:
 
 
 def compute_click_value() -> float:
-    """Instructions awarded for one manual click (1 base × global multiplier)."""
+    """Instructions awarded for one manual click."""
     return compute_total_multiplier()
 
 
 def next_gen_cost(gen: dict) -> int:
-    """Cookie-clicker style scaling: base_cost × 1.15^owned."""
-    owned = owned_counts[gen["name"]]
-    return int(gen["base_cost"] * (1.15 ** owned))
+    """Cookie-clicker scaling: base_cost × 1.15^owned."""
+    return int(gen["base_cost"] * (1.15 ** owned_counts[gen["name"]]))
 
 
 def next_mult_cost(mul: dict) -> int:
-    """Multiplier upgrades cost × 2 per purchase (they are very powerful)."""
-    count = mult_counts[mul["name"]]
-    return int(mul["base_cost"] * (2 ** count))
+    """Multiplier costs double each purchase."""
+    return int(mul["base_cost"] * (2 ** mult_counts[mul["name"]]))
 
 # ---------------------------------------------------------------------------
 # ── Display helpers ───────────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
 def fmt(n: float) -> str:
-    """Format large numbers with suffixes for readability."""
+    """Format large numbers with K/M/B/T/Q suffixes."""
     if n < 1_000:
         return str(int(n))
     for val, suffix in [(1e15, "Q"), (1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]:
@@ -130,42 +126,39 @@ def fmt(n: float) -> str:
 def update_display() -> None:
     """Refresh all dynamic UI text."""
     label.config(text=f"Instructions: {hex(int(instructions))}")
-    ips_label.config(text=f"IPS: {fmt(compute_total_ips())}   "
-                          f"Click: ×{fmt(compute_total_multiplier())}")
+    ips_label.config(
+        text=f"IPS: {fmt(compute_total_ips())}   Click: ×{fmt(compute_total_multiplier())}"
+    )
 
     # Generator rows
     for g in GENERATORS:
-        n = g["name"]
+        n   = g["name"]
         row = gen_rows[n]
         cost = next_gen_cost(g)
-        can_afford = instructions >= cost
         row["btn"].config(
             text=f"{g['label']}  [{fmt(cost)}]",
-            state="normal" if can_afford else "disabled",
+            state="normal" if instructions >= cost else "disabled",
         )
         row["count_lbl"].config(text=f"×{owned_counts[n]}")
         row["mult_lbl"].config(text=f"mult:{gen_mult[n]:.0f}")
 
     # Multiplier rows
     for m in MULTIPLIERS:
-        n = m["name"]
+        n   = m["name"]
         row = mult_rows[n]
         cost = next_mult_cost(m)
-        can_afford = instructions >= cost
-        lvl = mult_counts[n]
+        lvl  = mult_counts[n]
         row["btn"].config(
             text=f"{m['label']}  [Lv{lvl}] [{fmt(cost)}]",
-            state="normal" if can_afford else "disabled",
+            state="normal" if instructions >= cost else "disabled",
         )
 
-    # Stack window (if open)
     refresh_stack_window()
 
 
 def refresh_stack_window() -> None:
     global stack_window
     if stack_window and stack_window.winfo_exists():
-        # find the label inside and update it
         for widget in stack_window.winfo_children():
             if isinstance(widget, tk.Label):
                 widget.config(
@@ -175,14 +168,67 @@ def refresh_stack_window() -> None:
                 break
 
 # ---------------------------------------------------------------------------
-# ── Popup system ──────────────────────────────────────────────────────────
+# ── Hover tooltip system ──────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+
+class Tooltip:
+    """
+    Lightweight hover tooltip for any tkinter widget.
+    Shows a small Toplevel window near the widget on <Enter>,
+    destroys it on <Leave>.
+    """
+
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self.widget  = widget
+        self.text    = text
+        self._tip_win: tk.Toplevel | None = None
+
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, event=None) -> None:
+        if self._tip_win or not self.text:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() + 4
+        y = self.widget.winfo_rooty()
+
+        self._tip_win = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)   # no title bar / frame
+        tw.wm_geometry(f"+{x}+{y}")
+
+        tk.Label(
+            tw,
+            text=self.text,
+            justify="left",
+            background="#ffffe0",
+            relief="solid",
+            borderwidth=1,
+            font=("Courier", 9),
+            padx=6,
+            pady=4,
+        ).pack()
+
+    def _hide(self, event=None) -> None:
+        if self._tip_win:
+            self._tip_win.destroy()
+            self._tip_win = None
+
+# ---------------------------------------------------------------------------
+# ── Generator info popup ─────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
 def show_info_popup(name: str, info: str) -> None:
+    """Show teaching-aid popup for a generator instruction."""
     popup = tk.Toplevel(root)
     popup.title("Architecture Info")
-    tk.Label(popup, text=info, justify="left", padx=10, pady=10,
-             font=("Courier", 10)).pack()
+    tk.Label(
+        popup,
+        text=info,
+        justify="left",
+        padx=10,
+        pady=10,
+        font=("Courier", 10),
+    ).pack()
 
     suppress_var = tk.BooleanVar()
     if popup_view_counts.get(name, 0) >= 2:
@@ -201,7 +247,7 @@ def show_info_popup(name: str, info: str) -> None:
 
 def on_processor_click() -> None:
     global instructions
-    instructions += compute_click_value() * 10000000000000000
+    instructions += compute_click_value()
     update_display()
 
 # ---------------------------------------------------------------------------
@@ -215,13 +261,14 @@ def buy_generator(gen: dict) -> None:
         return
 
     instructions -= cost
-    owned_counts[gen["name"]] += 1
+    name = gen["name"]
+    owned_counts[name] += 1
+    popup_view_counts[name] = popup_view_counts.get(name, 0) + 1
 
-    popup_view_counts[gen["name"]] = popup_view_counts.get(gen["name"], 0) + 1
     update_display()
 
-    if not popup_disabled.get(gen["name"], False):
-        show_info_popup(gen["name"], gen["info"])
+    if not popup_disabled.get(name, False):
+        show_info_popup(name, gen["info"])
 
 # ---------------------------------------------------------------------------
 # ── Multiplier purchase & effects ─────────────────────────────────────────
@@ -229,36 +276,26 @@ def buy_generator(gen: dict) -> None:
 
 def apply_multiplier_effect(name: str) -> None:
     """Apply the game-mechanic effect for each high-level construct purchase."""
-
-    gen_names = [g["name"] for g in GENERATORS]   # ordered list
+    gen_names = [g["name"] for g in GENERATORS]
 
     if name == "IF_STATEMENT":
-        # Odd purchase (1st, 3rd, …) → generators at ODD indices (1,3,5)
-        # Even purchase (2nd, 4th, …) → generators at EVEN indices (0,2,4)
         purchase_num = mult_counts["IF_STATEMENT"]   # already incremented
-        if purchase_num % 2 == 1:   # odd purchase number
-            targets = gen_names[1::2]
-        else:                        # even purchase number
-            targets = gen_names[0::2]
+        targets = gen_names[1::2] if purchase_num % 2 == 1 else gen_names[0::2]
         for n in targets:
             gen_mult[n] += 1
 
     elif name == "WHILE_LOOP":
-        # Add the lowest current multiplier (min 1) to EVERY generator
-        lowest = max(1, min(gen_mult.values()))
+        lowest = max(1.0, min(gen_mult.values()))
         for n in gen_names:
             gen_mult[n] += lowest
 
     elif name == "FOR_LOOP":
-        # Level is tracked in mult_counts; formula already uses it
         pass   # effect is purely in compute_total_ips()
 
     elif name == "FUNCTION_CALL":
-        # Exponent level tracked in mult_counts; formula uses it
-        pass
+        pass   # exponent tracked in mult_counts; formula uses it
 
     elif name == "PARAM_PASSING":
-        # Set the lowest-multiplier generator to match the highest
         max_mult = max(gen_mult.values())
         min_name = min(gen_mult, key=lambda n: gen_mult[n])
         gen_mult[min_name] = max_mult
@@ -269,30 +306,23 @@ def apply_multiplier_effect(name: str) -> None:
 
 def do_stack_prestige() -> None:
     """Prestige reset: wipe everything, grant ×10 permanent bonus."""
-    global instructions, stack_prestige, stack_window
+    global instructions, stack_prestige
 
     stack_prestige += 1
 
-    # Reset generators
     for g in GENERATORS:
         owned_counts[g["name"]] = 0
-        gen_mult[g["name"]] = 1.0
+        gen_mult[g["name"]]     = 1.0
 
-    # Reset non-STACK multiplier counts
     for m in MULTIPLIERS:
         if m["name"] != "STACK":
             mult_counts[m["name"]] = 0
 
-    # Reset instructions
     instructions = 0.0
-
-    # Reset popup suppression so the player has to re-check "don't show"
     popup_view_counts.clear()
     popup_disabled.clear()
 
-    # Open / refresh the STACK status window
     open_stack_window()
-
     update_display()
 
 
@@ -310,7 +340,8 @@ def open_stack_window() -> None:
         text=f"STACK Prestige Count: {stack_prestige}\n"
              f"Permanent Multiplier: ×{10 ** stack_prestige:,}",
         font=("Arial", 14, "bold"),
-        padx=20, pady=20,
+        padx=20,
+        pady=20,
         fg="green",
     ).pack()
 
@@ -318,7 +349,8 @@ def open_stack_window() -> None:
         stack_window,
         text="This bonus persists until you close the game.",
         font=("Arial", 9),
-        padx=10, pady=5,
+        padx=10,
+        pady=5,
     ).pack()
 
 
@@ -331,7 +363,6 @@ def buy_multiplier(mul: dict) -> None:
     instructions -= cost
     name = mul["name"]
 
-    # Confirm the scary STACK prestige
     if name == "STACK":
         if not messagebox.askyesno(
             "Prestige Reset",
@@ -343,13 +374,9 @@ def buy_multiplier(mul: dict) -> None:
             return
 
     mult_counts[name] += 1
-    popup_view_counts[name] = popup_view_counts.get(name, 0) + 1
-
     apply_multiplier_effect(name)
     update_display()
-
-    if not popup_disabled.get(name, False):
-        show_info_popup(name, mul["info"])
+    # NOTE: No popup is shown for multipliers — hover tooltip handles info.
 
 # ---------------------------------------------------------------------------
 # ── Auto-increment (1-second tick) ───────────────────────────────────────
@@ -365,8 +392,9 @@ def auto_increment() -> None:
 # ── UI construction ───────────────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
-def build_ui() -> None:
+def build_ui():
     global label, ips_label, click_btn, root
+
     root = tk.Tk()
     root.title("Instruction Clicker")
 
@@ -383,10 +411,23 @@ def build_ui() -> None:
     click_btn.pack(pady=4)
     click_btn.image = processor_img   # prevent GC
 
-    # ── Section label ────────────────────────────────────────────────────────
+    # ── DEBUG ────────────────────────────────────────────────────────────────
+    def debug_give_money() -> None:
+        global instructions
+        instructions += 1_000_000_000
+        update_display()
+
+    tk.Button(
+        root,
+        text="[DEBUG] +1 Billion Instructions",
+        command=debug_give_money,
+        fg="red",
+        font=("Arial", 9, "italic"),
+    ).pack(pady=(0, 4))
+
+    # ── Generators section ───────────────────────────────────────────────────
     tk.Label(root, text="─── Generators ───", font=("Arial", 11, "bold")).pack(pady=(6, 0))
 
-    # ── Generator rows ───────────────────────────────────────────────────────
     for g in GENERATORS:
         frame = tk.Frame(root)
         frame.pack(pady=1, fill="x", padx=6)
@@ -406,13 +447,16 @@ def build_ui() -> None:
         mult_lbl = tk.Label(frame, text="mult:1", width=8, anchor="w")
         mult_lbl.pack(side="left", padx=4)
 
-        gen_rows[g["name"]] = {"frame": frame, "btn": btn,
-                               "count_lbl": count_lbl, "mult_lbl": mult_lbl}
+        gen_rows[g["name"]] = {
+            "frame": frame,
+            "btn": btn,
+            "count_lbl": count_lbl,
+            "mult_lbl": mult_lbl,
+        }
 
-    # ── Section label ────────────────────────────────────────────────────────
+    # ── Multipliers section ──────────────────────────────────────────────────
     tk.Label(root, text="─── Multipliers ───", font=("Arial", 11, "bold")).pack(pady=(8, 0))
 
-    # ── Multiplier rows ──────────────────────────────────────────────────────
     for m in MULTIPLIERS:
         frame = tk.Frame(root)
         frame.pack(pady=1, fill="x", padx=6)
@@ -426,9 +470,13 @@ def build_ui() -> None:
         )
         btn.pack(side="left")
 
+        # Attach hover tooltip with game-mechanic description
+        Tooltip(btn, m["tooltip"])
+
         mult_rows[m["name"]] = {"frame": frame, "btn": btn}
 
-    return root, processor_img   # return img ref to keep alive
+    return root, processor_img
+
 
 # ---------------------------------------------------------------------------
 # ── Entry point ───────────────────────────────────────────────────────────
